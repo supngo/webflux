@@ -1,0 +1,10 @@
+{
+  "ID": 2,
+  "Key": {
+    "Name": [ "US5YT=RRPS"],
+    "Service": "ELEKTRON_DD"
+  },
+  "View":[
+    "PRIMACT_1", "RT_YIELD_1", "VALUE_TS1"
+  ]
+}

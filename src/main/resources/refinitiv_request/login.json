@@ -1,0 +1,12 @@
+{
+  "ID":1,
+  "Domain": "Login",
+  "Key":{
+    "Elements":{
+      "ApplicationId": "",
+      "Position": "",
+      "AuthenticationToken": ""
+    },
+    "NameType":"AuthnToken"
+  }
+}
