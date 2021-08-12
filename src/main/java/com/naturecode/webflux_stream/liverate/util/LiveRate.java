@@ -1,5 +1,7 @@
 package com.naturecode.webflux_stream.liverate.util;
 
+import java.util.UUID;
+
 import com.naturecode.webflux_stream.liverate.model.Emitter;
 
 import org.springframework.stereotype.Component;
@@ -12,7 +14,6 @@ public class LiveRate {
   public static void stream(Emitter emitter) {
     try {
       WebSocketSession webSocketSession = WebSocketSession.getInstance();
-      // log.info("Stream " + emitter.getId() + " subscribing...");
       webSocketSession.subscribe(emitter);
     } catch (Exception e) {
       log.error(e.getMessage());
@@ -20,9 +21,8 @@ public class LiveRate {
     }
   }
 
-  public static void cancel(Emitter emitter) {
+  public static void cancel(UUID uuid) {
     WebSocketSession webSocketSession = WebSocketSession.getInstance();
-    // log.info("Stream " + emitter.getId() + " unsubscribing...");
-    webSocketSession.unsubscribe(emitter);
+    webSocketSession.unsubscribe(uuid);
   }
 }

@@ -294,7 +294,7 @@ public class RefinitivRate {
         double primaryAct = currentRate.getJSONObject("Fields").getDouble("PRIMACT_1");
         String service = currentRate.getJSONObject("Key").getString("Service");
         String name = currentRate.getJSONObject("Key").getString("Name");
-        Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp);
+        Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp, "uuid");
         _sink.next(liveRate);
       }
       // System.out.println(messageJson.toString(2));

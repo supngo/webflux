@@ -9,8 +9,10 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.naturecode.webflux_stream.liverate.model.Emitter;
@@ -26,12 +28,10 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 
 import lombok.extern.log4j.Log4j2;
-import reactor.core.publisher.FluxSink;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.Header;
 import org.apache.http.HttpResponse;
@@ -65,29 +65,23 @@ public final class WebSocketSession {
   ResourceLoader resourceLoader;
 
   // Static map used by WebSocketAdapter callbacks to find the associated WebSocketSession object.
-  public static Map<WebSocket, WebSocketSession> webSocketSessionMap = new ConcurrentHashMap<WebSocket, WebSocketSession>();
-
-  // passing the flux sink for streaming
-  // FluxSink<Rate> sink;
-  Vector<Emitter> listeners = new Vector<Emitter>();
+  private static Map<WebSocket, WebSocketSession> webSocketSessionMap = new ConcurrentHashMap<WebSocket, WebSocketSession>();
+  static Vector<Emitter> listeners = new Vector<Emitter>();
 
   private String position = "";
   private String appId = "256";
   private String scope = "trapi";
   private WebSocketFactory websocketFactory = new WebSocketFactory();
   private String name = "session1";
-  private WebSocket websocket;
+  private static WebSocket websocket;
   private String url;
   private String authToken;
   private JSONObject authJson = null;
   private JSONObject serviceJson = null;
-  boolean isLoggedIn = false;
+  private static AtomicBoolean isLoggedIn = new AtomicBoolean(false);
+  private static AtomicBoolean hasListener = new AtomicBoolean(false);
   private static final String authUrl = "https://api.refinitiv.com/auth/oauth2/v1/token";
   private static final String discoveryUrl = "https://api.refinitiv.com/streaming/pricing/v1/";
-
-  public void run() {
-    INSTANCE.loginAndDiscover();
-  }
 
   public synchronized static WebSocketSession getInstance() {
     if(INSTANCE == null) {
@@ -99,12 +93,33 @@ public final class WebSocketSession {
   public synchronized static void runInstance(String passedUser, String passedPassword, String passedClientId) {
     if(INSTANCE == null) {
       INSTANCE = new WebSocketSession();
+    }
+    if(!hasListener.get()) {
       user = passedUser;
       password = passedPassword;
       clientId = passedClientId;
       LiverateRunnable runnable = new LiverateRunnable();
       Thread t = new Thread(runnable);
       t.start();
+
+      // first listener subscribes, update hasListener to true
+      hasListener = new AtomicBoolean(true);
+
+      String requestJson = "/refinitiv_request/all.json";
+      InputStream is = TypeReference.class.getResourceAsStream(requestJson);
+      log.info("Start streaming in 8 seconds...");
+      try {
+        Thread.sleep(5000);
+        sendRequest(IOUtils.toString(is, "UTF-8"));
+      } catch (InterruptedException e) {
+        log.error(e.getMessage());
+        e.printStackTrace();
+      } catch (JSONException | IOException e) {
+        log.error(e.getMessage());
+        e.printStackTrace();
+      }
+    } else {
+      log.info("WebSocket is already running");
     }
   }
 
@@ -126,7 +141,7 @@ public final class WebSocketSession {
       this.authJson = getAuthenticationInfo(null, authUrl);
       if (authJson == null) {
         log.error("authJson is NULL");
-        // return;
+        return;
       }
       authToken = authJson.getString("access_token");
 
@@ -134,7 +149,7 @@ public final class WebSocketSession {
       serviceJson = queryServiceDiscovery(discoveryUrl);
       if (serviceJson == null) {
         log.error("serviceJson is NULL");
-        // return;
+        return;
       }
         
       // Create a host list based on the retrieved service information.
@@ -167,6 +182,7 @@ public final class WebSocketSession {
 
       // Determine when the access token expires. We will re-authenticate before then.
       int expireTime = Integer.parseInt(authJson.getString("expires_in")); 
+      long expire = System.currentTimeMillis() + (expireTime * 800);
       if (hotstandby) {
         if (hostList.size() < 2) {
           log.error("Error: Expected 2 hosts but received " + hostList.size());
@@ -181,33 +197,45 @@ public final class WebSocketSession {
       url = String.format("wss://%s/WebSocket", hostList.get(0));
       connect();
 
-      while (true) {
-        // log.info("in while loop");
-        // Continue using current token until 90% of initial time before it expires.
-        Thread.sleep(expireTime * 800); // The value 900 means 90% of expireTime in milliseconds
-        log.info("Time 80%: " + new Timestamp(System.currentTimeMillis()));
+      while (hasListener.get()) {
+        // Continue using current token until 80% of initial time before it expires and has listener.
+        // log.info(hasListener.get());
+        if(hasListener.get() && System.currentTimeMillis() < expire) {
+          // log.info(System.currentTimeMillis() + " - " + expire);
+          Thread.sleep(500);
+          continue;
+        }
 
-        // Connect to Refinitiv Data Platform and re-authenticate, using the refresh
-        // token provided in the previous response
+        // make sure to break out the look and stop the thread, might not be neccessary
+        // if(!hasListener.get()){
+        //   log.info("No more listener - break out of the loop");
+        //   break;
+        // }
+
+        log.info("updating token");
+
+        // re-authenticate, using the refresh token provided in the previous response
         authJson = getAuthenticationInfo(authJson, authUrl);
         if (authJson == null) {
           log.error("authJson is NULL");
+          return;
         }
-        // log.info("auth: " + authJson.toString());
 
         // If expiration time returned by refresh request is less then initial
         // expiration time, re-authenticate using password
         int refreshingExpireTime = Integer.parseInt(authJson.getString("expires_in"));
-        // log.info("new Time: " + refreshingExpireTime);
         if (refreshingExpireTime != expireTime) {
           log.info("expire time changed from " + expireTime + " sec to " + refreshingExpireTime + " sec; retry with password");
           authJson = getAuthenticationInfo(null, authUrl);
           if (authJson == null) {
             log.error("authJson is NULL");
-            // return;
+            return;
           }
           expireTime = Integer.parseInt(authJson.getString("expires_in"));
         }
+
+        // update expire time
+        expire = System.currentTimeMillis() + (expireTime * 800);
 
         // Send the updated access token over our WebSockets.
         updateToken(authJson.getString("access_token"));
@@ -401,10 +429,12 @@ public final class WebSocketSession {
             reconnect(websocket);
           }
 
-          public void onDisconnected(WebSocket websocket, WebSocketFrame serverCloseFrame,
-              WebSocketFrame clientCloseFrame, boolean closedByServer){
+          public void onDisconnected(WebSocket websocket, WebSocketFrame serverCloseFrame, WebSocketFrame clientCloseFrame, boolean closedByServer){
             log.info("WebSocket disconnected for " + name + ".");
             // reconnect(websocket);
+
+            WebSocketSession webSocketSession = webSocketSessionMap.get(websocket);
+            webSocketSession.isLoggedIn(false);
           }
 
           public void reconnect(WebSocket websocket) {
@@ -461,25 +491,34 @@ public final class WebSocketSession {
    * @throws JSONException
    * @throws IOException
    */
-  public void sendRequest(String request) throws JSONException, IOException {
+  public static void sendRequest(String request) throws JSONException, IOException {
     websocket.sendText(request);
   }
 
-  public void subscribe(Emitter listener) {
+  public synchronized void subscribe(Emitter listener) {
     log.info("stream " + listener.getId() + " subscribed...");
     listeners.add(listener);
   }
 
-  public void unsubscribe(Emitter listener) {
+  public synchronized void unsubscribe(UUID uuid) {
     int removeInd = -1;
     for (int i = 0; i < listeners.size(); i++) {
-      if (listeners.get(i).getId().compareTo(listener.getId()) == 0) {
+      if (listeners.get(i).getId().compareTo(uuid) == 0) {
         removeInd = i;
+        break;
       }
     }
     if (removeInd >= 0){
-      log.info("stream " + listener.getId() + " unsubscribed...");
+      log.info("stream " + listeners.get(removeInd).getId() + " unsubscribed...");
       listeners.remove(removeInd);
+
+      // set hasListener to false to so that we won't send Pong signal, server then kill the websocket conn
+      if(listeners.size() == 0) {
+        log.info("No more listener...");
+        hasListener.set(false);
+      }
+    } else {
+      log.error("no stream " + uuid + " found for cancelling" );
     }
   }
 
@@ -494,7 +533,7 @@ public final class WebSocketSession {
     String messageType = messageJson.getString("Type");
     // Only print out non login, update/refresh message
     if (!messageJson.has("Domain") && (messageType.equals("Refresh") || messageType.equals("Update"))) {
-      log.info("--> " + messageJson.toString(2));
+      log.info(messageJson.toString(2));
       JSONObject currentRate = new JSONObject(messageJson.toString(2));
       String timestamp = currentRate.getJSONObject("Fields").getString("VALUE_TS1");
       double rate = currentRate.getJSONObject("Fields").getDouble("RT_YIELD_1");
@@ -502,16 +541,16 @@ public final class WebSocketSession {
       String service = currentRate.getJSONObject("Key").getString("Service");
       String name = currentRate.getJSONObject("Key").getString("Name");
       int duration = Integer.parseInt(name.substring(2, name.indexOf("Y")));
-      Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp);
+      // Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp);
 
+      // send back the reactive change to client who subscribed to a specific rate year
       for (Emitter itr: listeners) {
-        if (itr.getDuration() == duration) {
+        if (itr.getDuration() == duration || itr.getDuration() == 10 || itr.getDuration() == 30) {
+          Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp, itr.getId().toString());
+          log.info("-> " + messageJson.toString(2));
           itr.getSink().next(liveRate);
         }
       }
-
-      // send back the reactive change to client
-      // sink.next(liveRate);
     }
     switch (messageType) {
       case "Refresh":
@@ -519,7 +558,6 @@ public final class WebSocketSession {
         if (messageJson.has("Domain")) {
           String messageDomain = messageJson.getString("Domain");
           if (messageDomain.equals("Login")) {
-            // log.info("=> " + messageJson.toString(2));
             // Check message state to see if login succeeded. If so, send item request. Otherwise stop.
             JSONObject messageState = messageJson.optJSONObject("State");
             if (messageState != null) {
@@ -535,10 +573,13 @@ public final class WebSocketSession {
         }
         break;
       case "Ping":
-        String pongJsonString = "{\"Type\":\"Pong\"}";
-        // JSONObject pongJson = new JSONObject(pongJsonString);
-        // log.info("SENT on " + name + ": \n" + pongJson.toString(2));
-        websocket.sendText(pongJsonString);
+        // only send heartbeat signal back when there's still listener being subscribed
+        if(hasListener.get()) {
+          // log.info("sending Pong signal...");
+          websocket.sendText("{\"Type\":\"Pong\"}");
+        } else {
+          log.info("No more listener - won't return Pong signal");
+        }
         break;
       default:
         break;
@@ -552,10 +593,13 @@ public final class WebSocketSession {
     authToken = updatedAuthToken;
 
     // Websocket not connected or logged in yet. Initial login will include the access token.
-    if (!isLoggedIn)
+    if (!isLoggedIn.get() || !hasListener.get()) {
+      log.info("not logged in");
       return;
-
-      try {
+    }
+    
+    try {
+      log.info("resend LoginRequest");
       sendLoginRequest(false);
     } catch (JSONException | IOException e) {
       log.error(e.getMessage());
@@ -567,7 +611,7 @@ public final class WebSocketSession {
    * Mark whether we are connected and logged in so that the updateToken method
    * knows whether or not to reissue the login.
    */
-  public synchronized void isLoggedIn(boolean isLoggedIn) {
-    this.isLoggedIn = isLoggedIn;
+  public synchronized void isLoggedIn(boolean flip) {
+    isLoggedIn.set(flip);
   }
 }

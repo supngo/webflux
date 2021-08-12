@@ -11,4 +11,5 @@ public class Rate {
   private String name;
   private String service;
   private String timestamp;
+  private String id;
 }

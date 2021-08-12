@@ -25,7 +25,7 @@ public class ReactiveRateRepo implements RateRepo {
   }
 
   private List<Rate> consumeRate(long interval) {
-    Rate obj = new Rate(1.235, 103.12, "US10YT=RRPS", "ELEKTRON_DD", dtf.format(LocalDateTime.now()));
+    Rate obj = new Rate(1.235, 103.12, "US10YT=RRPS", "ELEKTRON_DD", dtf.format(LocalDateTime.now()), "uuid");
     return Arrays.asList(obj);
   }
 }
