@@ -75,9 +75,9 @@ public final class WebSocketSession {
   private String name = "session1";
   private static WebSocket websocket;
   private String url;
-  private String authToken;
-  private JSONObject authJson = null;
-  private JSONObject serviceJson = null;
+  private static String authToken;
+  private static JSONObject authJson = null;
+  private static JSONObject serviceJson = null;
   private static AtomicBoolean isLoggedIn = new AtomicBoolean(false);
   private static AtomicBoolean hasListener = new AtomicBoolean(false);
   private static final String authUrl = "https://api.refinitiv.com/auth/oauth2/v1/token";
@@ -107,7 +107,7 @@ public final class WebSocketSession {
 
       String requestJson = "/refinitiv_request/all.json";
       InputStream is = TypeReference.class.getResourceAsStream(requestJson);
-      log.info("Start streaming in 8 seconds...");
+      log.info("Start streaming in 5 seconds...");
       try {
         Thread.sleep(5000);
         sendRequest(IOUtils.toString(is, "UTF-8"));
@@ -138,7 +138,7 @@ public final class WebSocketSession {
 
     try {
       // Connect to Refinitiv Data Platform and authenticate (using our username and password)
-      this.authJson = getAuthenticationInfo(null, authUrl);
+      authJson = getAuthenticationInfo(null, authUrl);
       if (authJson == null) {
         log.error("authJson is NULL");
         return;
@@ -199,18 +199,11 @@ public final class WebSocketSession {
 
       while (hasListener.get()) {
         // Continue using current token until 80% of initial time before it expires and has listener.
-        // log.info(hasListener.get());
         if(hasListener.get() && System.currentTimeMillis() < expire) {
           // log.info(System.currentTimeMillis() + " - " + expire);
           Thread.sleep(500);
           continue;
         }
-
-        // make sure to break out the look and stop the thread, might not be neccessary
-        // if(!hasListener.get()){
-        //   log.info("No more listener - break out of the loop");
-        //   break;
-        // }
 
         log.info("updating token");
 
@@ -240,6 +233,7 @@ public final class WebSocketSession {
         // Send the updated access token over our WebSockets.
         updateToken(authJson.getString("access_token"));
       }
+      log.info("update token loop break - thread is done");
     } catch (JSONException e) {
       log.error(e.getMessage());
       e.printStackTrace();
@@ -285,8 +279,6 @@ public final class WebSocketSession {
         case HttpStatus.SC_OK: // 200
           // Authentication was successful. Deserialize the response and return it.
           JSONObject responseJson = new JSONObject(EntityUtils.toString(response.getEntity()));
-          // System.out.println("Refinitiv Data Platform Authentication succeeded. RECEIVED:");
-          // System.out.println(responseJson.toString(2));
           return responseJson;
         case HttpStatus.SC_MOVED_PERMANENTLY: // 301
         case HttpStatus.SC_MOVED_TEMPORARILY: // 302
@@ -454,7 +446,6 @@ public final class WebSocketSession {
       } catch (IOException e) {
         log.error(e.getMessage());
         e.printStackTrace();
-        // System.exit(1);
       }
     }
     webSocketSessionMap.put(websocket, this);
@@ -472,7 +463,6 @@ public final class WebSocketSession {
    */
   private void sendLoginRequest(boolean isFirstLogin) throws JSONException, IOException {
     InputStream is = TypeReference.class.getResourceAsStream("/refinitiv_request/login.json");
-    // String loginJsonString = "{\"ID\":1,\"Domain\":\"Login\",\"Key\":{\"Elements\":{\"ApplicationId\":\"\",\"Position\":\"\",\"AuthenticationToken\":\"\"},\"NameType\":\"AuthnToken\"}}";
     String loginJsonString = IOUtils.toString(is, "UTF-8");
     JSONObject loginJson = new JSONObject(loginJsonString);
     loginJson.getJSONObject("Key").getJSONObject("Elements").put("AuthenticationToken", authToken);
@@ -513,6 +503,7 @@ public final class WebSocketSession {
       listeners.remove(removeInd);
 
       // set hasListener to false to so that we won't send Pong signal, server then kill the websocket conn
+      log.info("size:  " + listeners.size());
       if(listeners.size() == 0) {
         log.info("No more listener...");
         hasListener.set(false);
@@ -533,7 +524,6 @@ public final class WebSocketSession {
     String messageType = messageJson.getString("Type");
     // Only print out non login, update/refresh message
     if (!messageJson.has("Domain") && (messageType.equals("Refresh") || messageType.equals("Update"))) {
-      log.info(messageJson.toString(2));
       JSONObject currentRate = new JSONObject(messageJson.toString(2));
       String timestamp = currentRate.getJSONObject("Fields").getString("VALUE_TS1");
       double rate = currentRate.getJSONObject("Fields").getDouble("RT_YIELD_1");
@@ -541,13 +531,12 @@ public final class WebSocketSession {
       String service = currentRate.getJSONObject("Key").getString("Service");
       String name = currentRate.getJSONObject("Key").getString("Name");
       int duration = Integer.parseInt(name.substring(2, name.indexOf("Y")));
-      // Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp);
 
       // send back the reactive change to client who subscribed to a specific rate year
       for (Emitter itr: listeners) {
-        if (itr.getDuration() == duration || itr.getDuration() == 10 || itr.getDuration() == 30) {
+        if (itr.getDuration() == duration) {
           Rate liveRate = new Rate(rate, primaryAct, name, service, timestamp, itr.getId().toString());
-          log.info("-> " + messageJson.toString(2));
+          log.info("-> " + name + " - " + rate + " - " + timestamp);
           itr.getSink().next(liveRate);
         }
       }
@@ -575,7 +564,6 @@ public final class WebSocketSession {
       case "Ping":
         // only send heartbeat signal back when there's still listener being subscribed
         if(hasListener.get()) {
-          // log.info("sending Pong signal...");
           websocket.sendText("{\"Type\":\"Pong\"}");
         } else {
           log.info("No more listener - won't return Pong signal");

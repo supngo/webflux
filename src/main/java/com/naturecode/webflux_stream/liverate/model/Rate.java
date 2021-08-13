@@ -10,6 +10,6 @@ public class Rate {
   private double primaryAct;
   private String name;
   private String service;
-  private String timestamp;
+  private String timeStamp;
   private String id;
 }
