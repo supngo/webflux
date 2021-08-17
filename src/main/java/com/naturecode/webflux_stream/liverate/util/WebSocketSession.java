@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.Inet4Address;
 import java.net.UnknownHostException;
-import java.sql.Timestamp;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -32,7 +32,6 @@ import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 
 import lombok.extern.log4j.Log4j2;
-import org.apache.commons.io.IOUtils;
 import org.apache.http.Header;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
@@ -110,7 +109,8 @@ public final class WebSocketSession {
       log.info("Start streaming in 5 seconds...");
       try {
         Thread.sleep(5000);
-        sendRequest(IOUtils.toString(is, "UTF-8"));
+        String request = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        sendRequest(request);
       } catch (InterruptedException e) {
         log.error(e.getMessage());
         e.printStackTrace();
@@ -463,7 +463,8 @@ public final class WebSocketSession {
    */
   private void sendLoginRequest(boolean isFirstLogin) throws JSONException, IOException {
     InputStream is = TypeReference.class.getResourceAsStream("/refinitiv_request/login.json");
-    String loginJsonString = IOUtils.toString(is, "UTF-8");
+    String loginJsonString = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+    // String loginJsonString = IOUtils.toString(is, "UTF-8");
     JSONObject loginJson = new JSONObject(loginJsonString);
     loginJson.getJSONObject("Key").getJSONObject("Elements").put("AuthenticationToken", authToken);
     loginJson.getJSONObject("Key").getJSONObject("Elements").put("ApplicationId", appId);
@@ -531,6 +532,7 @@ public final class WebSocketSession {
       String service = currentRate.getJSONObject("Key").getString("Service");
       String name = currentRate.getJSONObject("Key").getString("Name");
       int duration = Integer.parseInt(name.substring(2, name.indexOf("Y")));
+      log.info("=> " + name + " - " + rate + " - " + timestamp);
 
       // send back the reactive change to client who subscribed to a specific rate year
       for (Emitter itr: listeners) {
