@@ -532,7 +532,7 @@ public final class WebSocketSession {
       String service = currentRate.getJSONObject("Key").getString("Service");
       String name = currentRate.getJSONObject("Key").getString("Name");
       int duration = Integer.parseInt(name.substring(2, name.indexOf("Y")));
-      log.info("=> " + name + " - " + rate + " - " + timestamp);
+      // log.info("=> " + name + " - " + rate + " - " + timestamp);
 
       // send back the reactive change to client who subscribed to a specific rate year
       for (Emitter itr: listeners) {
